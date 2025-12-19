@@ -21,7 +21,6 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from ...core.task_manager import get_task_manager, TaskStatus
 from ...core.config import get_config
 from ..middleware.auth import validate_api_key, deduct_balance
-from ...database import get_api_key
 from ...solvers import solve_captcha
 
 logger = logging.getLogger(__name__)
@@ -242,16 +241,15 @@ async def create_task(
     ```
     """
     try:
-        # Validate API key
-        key_valid, key_error = await validate_api_key(request.clientKey)
+        # Validate API key and get key data in one call
+        key_valid, key_error, key_data = await validate_api_key(request.clientKey)
         if not key_valid:
             return {
                 "errorId": ERROR_CODES["ERROR_KEY_DOES_NOT_EXIST"],
                 "errorMessage": key_error
             }
         
-        # Get user's thread limit from database
-        key_data = await get_api_key(request.clientKey)
+        # Get user's thread limit from key_data (no extra DB call!)
         max_threads = key_data.get("max_threads", 5) if key_data else 5
         
         # Check current active task count
@@ -346,7 +344,7 @@ async def get_task_result(request: GetTaskResultRequest):
     """
     try:
         # Validate API key
-        key_valid, _ = await validate_api_key(request.clientKey)
+        key_valid, _, _ = await validate_api_key(request.clientKey)
         if not key_valid:
             return {
                 "errorId": ERROR_CODES["ERROR_KEY_DOES_NOT_EXIST"],
@@ -409,7 +407,7 @@ async def solve_direct(request: DirectSolveRequest):
     """
     try:
         # Validate API key
-        key_valid, key_error = await validate_api_key(request.api_key)
+        key_valid, key_error, _ = await validate_api_key(request.api_key)
         if not key_valid:
             return {"success": False, "error": key_error}
         

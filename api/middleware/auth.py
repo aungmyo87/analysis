@@ -30,38 +30,44 @@ from database import (
 logger = logging.getLogger(__name__)
 
 
-async def validate_api_key(api_key: str) -> Tuple[bool, Optional[str]]:
+async def validate_api_key(api_key: str) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
     """
-    Validate an API key (async).
+    Validate an API key and return its data (async).
+    
+    This returns the key data to avoid redundant database calls.
+    Callers can use the key_data for max_threads, balance, etc.
     
     Args:
         api_key: The API key to validate
     
     Returns:
-        Tuple of (is_valid, error_message)
+        Tuple of (is_valid, error_message, key_data)
+        - is_valid: True if key is valid and has balance
+        - error_message: Error description if invalid, None otherwise
+        - key_data: Full key data dict if valid, None otherwise
     """
     if not api_key:
-        return False, "API key is required"
+        return False, "API key is required", None
     
     key_data = await get_api_key(api_key)
     
     if not key_data:
-        return False, "Invalid API key"
+        return False, "Invalid API key", None
     
     # Check expiry
     if key_data.get('expires_at'):
         try:
             expires = datetime.fromisoformat(key_data['expires_at'])
             if datetime.now() > expires:
-                return False, "API key has expired"
+                return False, "API key has expired", None
         except (ValueError, TypeError):
             pass  # Invalid date format, ignore expiry check
     
     # Check balance
     if key_data.get('balance', 0) <= 0:
-        return False, "Insufficient balance"
+        return False, "Insufficient balance", None
     
-    return True, None
+    return True, None, key_data
 
 
 async def get_balance(api_key: str) -> float:

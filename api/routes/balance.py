@@ -13,9 +13,7 @@ from fastapi import APIRouter
 
 from ..middleware.auth import (
     validate_api_key, 
-    get_balance, 
     add_balance as add_key_balance,
-    is_owner_key
 )
 
 logger = logging.getLogger(__name__)
@@ -64,14 +62,15 @@ async def get_balance_route(request: GetBalanceRequest):
     ```
     """
     try:
-        key_valid, key_error = await validate_api_key(request.clientKey)
+        key_valid, key_error, key_data = await validate_api_key(request.clientKey)
         if not key_valid:
             return {
                 "errorId": 1,
                 "errorMessage": key_error
             }
         
-        balance = await get_balance(request.clientKey)
+        # Get balance from key_data (no extra DB call!)
+        balance = key_data.get("balance", 0.0) if key_data else 0.0
         
         return {
             "errorId": 0,
@@ -109,23 +108,23 @@ async def add_balance(request: AddBalanceRequest):
     ```
     """
     try:
-        # Validate admin key
-        key_valid, key_error = await validate_api_key(request.clientKey)
+        # Validate admin key and get key_data
+        key_valid, key_error, key_data = await validate_api_key(request.clientKey)
         if not key_valid:
             return {
                 "errorId": 1,
                 "errorMessage": key_error
             }
         
-        # Check if admin
-        if not await is_owner_key(request.clientKey):
+        # Check if admin from key_data (no extra DB call!)
+        if not (key_data and key_data.get("is_owner", False)):
             return {
                 "errorId": 2,
                 "errorMessage": "Insufficient privileges"
             }
         
         # Validate target key exists
-        target_valid, _ = await validate_api_key(request.targetKey)
+        target_valid, _, _ = await validate_api_key(request.targetKey)
         if not target_valid:
             return {
                 "errorId": 1,
