@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     key TEXT UNIQUE NOT NULL,
     balance REAL DEFAULT 0.0,
     is_owner INTEGER DEFAULT 0,
+    max_threads INTEGER DEFAULT 5,
     created_at TEXT NOT NULL,
     expires_at TEXT,
     last_used_at TEXT,
@@ -219,7 +220,7 @@ async def get_api_key(key: str) -> Optional[Dict[str, Any]]:
     
     async with db.execute(
         """
-        SELECT id, key, balance, is_owner, created_at, expires_at,
+        SELECT id, key, balance, is_owner, max_threads, created_at, expires_at,
                last_used_at, total_requests, total_spent
         FROM api_keys WHERE key = ?
         """,
@@ -235,11 +236,12 @@ async def get_api_key(key: str) -> Optional[Dict[str, Any]]:
             "key": row[1],
             "balance": row[2],
             "is_owner": bool(row[3]),
-            "created_at": row[4],
-            "expires_at": row[5],
-            "last_used_at": row[6],
-            "total_requests": row[7],
-            "total_spent": row[8],
+            "max_threads": row[4] or 5,  # Default to 5 if NULL
+            "created_at": row[5],
+            "expires_at": row[6],
+            "last_used_at": row[7],
+            "total_requests": row[8],
+            "total_spent": row[9],
         }
 
 
@@ -293,6 +295,7 @@ async def create_api_key_record(
     key: str,
     balance: float = 0.0,
     is_owner: bool = False,
+    max_threads: int = 5,
     expires_at: Optional[str] = None
 ) -> int:
     """
@@ -302,6 +305,7 @@ async def create_api_key_record(
         key: The API key string
         balance: Initial balance
         is_owner: Whether this is an owner key
+        max_threads: Maximum concurrent threads/tasks (default 5)
         expires_at: Expiration datetime (ISO format)
     
     Returns:
@@ -312,10 +316,10 @@ async def create_api_key_record(
     
     cursor = await db.execute(
         """
-        INSERT INTO api_keys (key, balance, is_owner, created_at, expires_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO api_keys (key, balance, is_owner, max_threads, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (key, balance, int(is_owner), now, expires_at)
+        (key, balance, int(is_owner), max_threads, now, expires_at)
     )
     await db.commit()
     

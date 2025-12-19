@@ -254,6 +254,26 @@ class TaskManager:
             ]
             return pending[:limit]
     
+    def get_active_count_for_user(self, client_key: str) -> int:
+        """
+        Get the number of active tasks (PENDING or PROCESSING) for a specific API key.
+        
+        Used for thread limiting - counts tasks that are currently consuming resources.
+        
+        Args:
+            client_key: The API key to count tasks for
+        
+        Returns:
+            Number of active tasks for this user
+        """
+        with self._lock:
+            active_count = sum(
+                1 for task in self._tasks.values()
+                if task.client_key == client_key
+                and task.status in (TaskStatus.PENDING, TaskStatus.PROCESSING)
+            )
+            return active_count
+    
     def _cleanup_old_tasks(self):
         """Remove expired/old tasks"""
         now = time.time()

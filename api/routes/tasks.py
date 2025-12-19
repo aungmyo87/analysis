@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from ...core.task_manager import get_task_manager, TaskStatus
 from ...core.config import get_config
 from ..middleware.auth import validate_api_key, deduct_balance
+from ...database import get_api_key
 from ...solvers import solve_captcha
 
 logger = logging.getLogger(__name__)
@@ -247,6 +248,20 @@ async def create_task(
             return {
                 "errorId": ERROR_CODES["ERROR_KEY_DOES_NOT_EXIST"],
                 "errorMessage": key_error
+            }
+        
+        # Get user's thread limit from database
+        key_data = await get_api_key(request.clientKey)
+        max_threads = key_data.get("max_threads", 5) if key_data else 5
+        
+        # Check current active task count
+        task_manager = get_task_manager()
+        active_count = task_manager.get_active_count_for_user(request.clientKey)
+        
+        if active_count >= max_threads:
+            return {
+                "errorId": ERROR_CODES.get("ERROR_NO_SLOT_AVAILABLE", 2),
+                "errorMessage": f"Maximum thread limit reached ({active_count}/{max_threads})"
             }
         
         task_data = request.task
