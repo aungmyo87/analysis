@@ -18,7 +18,13 @@ Usage:
     model = get_yolo_model()  # Returns cached instance
 """
 
-from .audio_solver import AudioSolver, AudioRateLimitError
+from .audio_solver import (
+    AudioSolver,
+    AudioRateLimitError,
+    load_whisper_model,
+    get_whisper_model,
+    get_whisper_model_async,
+)
 from .image_solver import (
     ImageSolver,
     load_yolo_model,
@@ -27,8 +33,13 @@ from .image_solver import (
 )
 
 __all__ = [
+    # Audio
     'AudioSolver',
     'AudioRateLimitError',
+    'load_whisper_model',
+    'get_whisper_model',
+    'get_whisper_model_async',
+    # Image
     'ImageSolver',
     'load_yolo_model',
     'get_yolo_model',

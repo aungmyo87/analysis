@@ -38,6 +38,7 @@ from api.app import create_app
 from core.config import get_config, load_config
 from core.browser_pool import get_browser_pool, close_browser_pool
 from challenges.image_solver import load_yolo_model, get_yolo_model
+from challenges.audio_solver import load_whisper_model, get_whisper_model
 from database import init_db, close_db
 from utils.logger import setup_logging
 
@@ -60,32 +61,41 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     
     # 1. Initialize SQLite database
-    logger.info("[1/3] Initializing SQLite database...")
+    logger.info("[1/4] Initializing SQLite database...")
     try:
         await init_db()
-        logger.info("[1/3] Database initialized successfully")
+        logger.info("[1/4] Database initialized successfully")
     except Exception as e:
-        logger.error(f"[1/3] Failed to initialize database: {e}")
+        logger.error(f"[1/4] Failed to initialize database: {e}")
         raise  # Can't operate without database
     
-    # 2. Load YOLO model (singleton - ~2-5 seconds, done ONCE)
-    logger.info("[2/3] Loading YOLO model...")
+    # 2. Load Whisper model (singleton - ~10-30 seconds for medium, done ONCE)
+    logger.info("[2/4] Loading Whisper model (this takes ~10-30 seconds)...")
+    try:
+        whisper_model = load_whisper_model()
+        logger.info(f"[2/4] Whisper model loaded successfully")
+    except Exception as e:
+        logger.error(f"[2/4] Failed to load Whisper model: {e}")
+        # Continue without model - audio solver will try to load on demand
+    
+    # 3. Load YOLO model (singleton - ~2-5 seconds, done ONCE)
+    logger.info("[3/4] Loading YOLO model...")
     try:
         model = load_yolo_model()
-        logger.info(f"[2/3] YOLO model loaded: {type(model).__name__}")
+        logger.info(f"[3/4] YOLO model loaded: {type(model).__name__}")
     except Exception as e:
-        logger.error(f"[2/3] Failed to load YOLO model: {e}")
+        logger.error(f"[3/4] Failed to load YOLO model: {e}")
         # Continue without model - will fallback to audio solver
     
-    # 3. Initialize Browser Pool (launches persistent browsers)
-    logger.info("[3/3] Initializing browser pool...")
+    # 4. Initialize Browser Pool (launches persistent browsers)
+    logger.info("[4/4] Initializing browser pool...")
     try:
         pool = await get_browser_pool()
         stats = pool.get_stats()
-        logger.info(f"[3/3] Browser pool ready: {stats['browser_count']} browsers, "
+        logger.info(f"[4/4] Browser pool ready: {stats['browser_count']} browsers, "
                    f"max {stats['max_total_capacity']} concurrent contexts")
     except Exception as e:
-        logger.error(f"[3/3] Failed to initialize browser pool: {e}")
+        logger.error(f"[4/4] Failed to initialize browser pool: {e}")
         raise  # Can't operate without browsers
     
     logger.info("=" * 60)

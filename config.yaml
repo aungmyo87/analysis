@@ -3,7 +3,7 @@
 server:
   host: "0.0.0.0"
   port: 8080
-  workers: 4
+  workers: 1              # Single worker: models are process-local
   debug: false
 
 browser:
@@ -20,7 +20,7 @@ solver:
   audio:
     engine: "whisper"          # whisper | google | azure
     whisper_model: "medium"    # medium for better accuracy (needs ~5GB RAM)
-    max_attempts: 5
+    max_attempts: 3            # Reduced: rate limit triggers YOLO fallback faster
     
   image:
     engine: "yolo"             # yolo | clip | openai

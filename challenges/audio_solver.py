@@ -48,7 +48,6 @@ class AudioSolver:
         self.config = get_config()
         self.engine = self.config.solver.audio.engine
         self.max_attempts = self.config.solver.audio.max_attempts
-        self._whisper_model = None
     
     async def solve(self, page) -> Dict[str, Any]:
         """
@@ -321,21 +320,23 @@ class AudioSolver:
         """
         Transcribe using local Whisper model with reCAPTCHA-tuned settings.
         
+        Uses GLOBAL SINGLETON - model loaded once at startup.
+        
         Optimizations:
         - Medium model for better accuracy (fits 24GB RAM)
         - initial_prompt tuned for digit/letter sequences
-        - Clean audio before transcription
+        - Clean audio before transcription (pydub normalization)
         """
         try:
-            import whisper  # type: ignore
+            # Get global singleton model (loaded at startup)
+            model = get_whisper_model()
             
-            # Load model (cached) - use medium for better accuracy
-            if self._whisper_model is None:
-                model_name = self.config.solver.audio.whisper_model
-                logger.info(f"Loading Whisper model: {model_name}")
-                self._whisper_model = whisper.load_model(model_name)
+            if model is None:
+                # Fallback: load model if not initialized at startup
+                logger.warning("Whisper model not pre-loaded, loading now...")
+                model = await get_whisper_model_async()
             
-            # Clean audio before transcription
+            # Clean audio before transcription (normalize + strip silence)
             cleaned_path = self._clean_audio(audio_path)
             
             try:
@@ -347,16 +348,20 @@ class AudioSolver:
                     "m n p q r, 2 4 6 8 0."
                 )
                 
-                # Transcribe with optimized settings
-                result = self._whisper_model.transcribe(
-                    cleaned_path,
-                    language="en",
-                    fp16=False,  # CPU mode
-                    initial_prompt=initial_prompt,
-                    temperature=0.0,  # Deterministic output
-                    compression_ratio_threshold=2.4,
-                    logprob_threshold=-1.0,
-                    no_speech_threshold=0.6,
+                # Run transcription in thread pool to not block event loop
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: model.transcribe(
+                        cleaned_path,
+                        language="en",
+                        fp16=False,  # CPU mode
+                        initial_prompt=initial_prompt,
+                        temperature=0.0,  # Deterministic output
+                        compression_ratio_threshold=2.4,
+                        logprob_threshold=-1.0,
+                        no_speech_threshold=0.6,
+                    )
                 )
                 
                 text = result.get("text", "").strip()
