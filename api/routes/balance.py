@@ -64,14 +64,14 @@ async def get_balance_route(request: GetBalanceRequest):
     ```
     """
     try:
-        key_valid, key_error = validate_api_key(request.clientKey)
+        key_valid, key_error = await validate_api_key(request.clientKey)
         if not key_valid:
             return {
                 "errorId": 1,
                 "errorMessage": key_error
             }
         
-        balance = get_balance(request.clientKey)
+        balance = await get_balance(request.clientKey)
         
         return {
             "errorId": 0,
@@ -110,7 +110,7 @@ async def add_balance(request: AddBalanceRequest):
     """
     try:
         # Validate admin key
-        key_valid, key_error = validate_api_key(request.clientKey)
+        key_valid, key_error = await validate_api_key(request.clientKey)
         if not key_valid:
             return {
                 "errorId": 1,
@@ -118,14 +118,14 @@ async def add_balance(request: AddBalanceRequest):
             }
         
         # Check if admin
-        if not is_owner_key(request.clientKey):
+        if not await is_owner_key(request.clientKey):
             return {
                 "errorId": 2,
                 "errorMessage": "Insufficient privileges"
             }
         
         # Validate target key exists
-        target_valid, _ = validate_api_key(request.targetKey)
+        target_valid, _ = await validate_api_key(request.targetKey)
         if not target_valid:
             return {
                 "errorId": 1,
@@ -133,7 +133,7 @@ async def add_balance(request: AddBalanceRequest):
             }
         
         # Add balance
-        new_balance = add_key_balance(request.targetKey, request.amount)
+        new_balance = await add_key_balance(request.targetKey, request.amount)
         
         return {
             "errorId": 0,

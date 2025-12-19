@@ -173,7 +173,7 @@ async def process_task(task_id: str):
             price = getattr(config.pricing, f"{task.recaptcha_type}_v2", 0.001)
             
             # Deduct balance
-            deduct_balance(task.client_key, price)
+            await deduct_balance(task.client_key, price)
             
             # Update task with solution
             task_manager.update_task_status(
@@ -242,7 +242,7 @@ async def create_task(
     """
     try:
         # Validate API key
-        key_valid, key_error = validate_api_key(request.clientKey)
+        key_valid, key_error = await validate_api_key(request.clientKey)
         if not key_valid:
             return {
                 "errorId": ERROR_CODES["ERROR_KEY_DOES_NOT_EXIST"],
@@ -331,7 +331,7 @@ async def get_task_result(request: GetTaskResultRequest):
     """
     try:
         # Validate API key
-        key_valid, _ = validate_api_key(request.clientKey)
+        key_valid, _ = await validate_api_key(request.clientKey)
         if not key_valid:
             return {
                 "errorId": ERROR_CODES["ERROR_KEY_DOES_NOT_EXIST"],
@@ -394,7 +394,7 @@ async def solve_direct(request: DirectSolveRequest):
     """
     try:
         # Validate API key
-        key_valid, key_error = validate_api_key(request.api_key)
+        key_valid, key_error = await validate_api_key(request.api_key)
         if not key_valid:
             return {"success": False, "error": key_error}
         
@@ -420,7 +420,7 @@ async def solve_direct(request: DirectSolveRequest):
             # Deduct balance
             config = get_config()
             price = getattr(config.pricing, f"{request.type}_v2", 0.001)
-            deduct_balance(request.api_key, price)
+            await deduct_balance(request.api_key, price)
             
             return {
                 "success": True,
