@@ -1,19 +1,29 @@
 # Unified reCAPTCHA Solver Dependencies
+# Optimized for FastAPI + Async Architecture
 
-# Web Framework
-flask>=3.0.0
-flask-cors>=4.0.0
-gunicorn>=21.0.0
+# =============================================================================
+# WEB FRAMEWORK - FastAPI (Async-native, high-performance)
+# =============================================================================
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+starlette>=0.35.0
 
-# Browser Automation
+# =============================================================================
+# BROWSER AUTOMATION - Patchright (Async Playwright fork)
+# =============================================================================
 patchright>=0.1.0
 
-# Audio Processing
+# =============================================================================
+# AUDIO PROCESSING
+# =============================================================================
 SpeechRecognition>=3.10.0
 openai-whisper>=20231117
 pydub>=0.25.1
 
-# Image Processing & ML
+# =============================================================================
+# IMAGE PROCESSING & ML - YOLO Object Detection
+# =============================================================================
 ultralytics>=8.1.0
 torch>=2.1.0
 torchvision>=0.16.0
@@ -21,21 +31,27 @@ Pillow>=10.0.0
 numpy<2.0
 opencv-python>=4.8.0
 
-# Async & Concurrency
+# =============================================================================
+# ASYNC & HTTP CLIENTS
+# =============================================================================
 aiohttp>=3.9.0
-asyncio>=3.4.3
+httpx>=0.25.0
+aiofiles>=23.2.0
 
-# Configuration
+# =============================================================================
+# CONFIGURATION & UTILITIES
+# =============================================================================
 pyyaml>=6.0.0
 python-dotenv>=1.0.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
 
-# Utilities
-requests>=2.31.0
-httpx>=0.25.0
-uuid>=1.30
-
-# Logging
+# =============================================================================
+# LOGGING & MONITORING
+# =============================================================================
 structlog>=23.2.0
 
-# Optional: Azure Speech
+# =============================================================================
+# OPTIONAL: Azure Speech Services
+# =============================================================================
 # azure-cognitiveservices-speech>=1.32.0

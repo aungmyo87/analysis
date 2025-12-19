@@ -1,6 +1,16 @@
 """
 Normal reCAPTCHA v2 Solver
-Handles standard checkbox reCAPTCHA with visible checkbox
+==========================
+
+Handles standard checkbox reCAPTCHA with visible checkbox.
+
+OPTIMIZATION: Uses 'domcontentloaded' instead of 'networkidle'
+--------------------------------------------------------------
+- networkidle: Waits for NO network activity for 500ms (slow, unreliable)
+- domcontentloaded: Waits for DOM to be ready (fast, ~2-5x faster)
+
+The reCAPTCHA widget loads early in the page lifecycle.
+We don't need to wait for all resources (images, analytics, ads) to load.
 """
 
 import logging
@@ -54,13 +64,26 @@ class NormalSolver(BaseSolver):
             
             try:
                 # Acquire browser with fresh context
-                page, cleanup = await browser_pool.acquire_with_context(proxy)
+                page, cleanup = await browser_pool.acquire_with_cleanup(proxy)
                 
                 self.logger.info(f"Attempt {attempt + 1}: Navigating to {url}")
                 
                 # Navigate to target URL
-                await page.goto(url, wait_until="networkidle", timeout=30000)
-                await page.wait_for_timeout(2000)
+                # OPTIMIZATION: Use 'domcontentloaded' instead of 'networkidle'
+                # - domcontentloaded: ~1-3 seconds (DOM ready)
+                # - networkidle: ~5-15 seconds (waits for ALL network to quiet)
+                # reCAPTCHA loads early, we don't need full page load
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                
+                # Wait for reCAPTCHA iframe to appear (more reliable than fixed timeout)
+                try:
+                    await page.wait_for_selector(
+                        "iframe[src*='recaptcha']",
+                        timeout=10000
+                    )
+                except Exception:
+                    # Fallback: brief wait if selector not found
+                    await page.wait_for_timeout(2000)
                 
                 # Click the checkbox
                 checkbox_clicked = await self._click_checkbox(page)

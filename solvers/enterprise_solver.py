@@ -64,7 +64,7 @@ class EnterpriseSolver(BaseSolver):
             
             try:
                 # Acquire browser with fresh context
-                page, cleanup = await browser_pool.acquire_with_context(proxy)
+                page, cleanup = await browser_pool.acquire_with_cleanup(proxy)
                 
                 self.logger.info(f"Attempt {attempt + 1}: Navigating to {url}")
                 
@@ -96,8 +96,14 @@ class EnterpriseSolver(BaseSolver):
                 ''')
                 
                 # Navigate to target URL
-                await page.goto(url, wait_until="networkidle", timeout=30000)
-                await page.wait_for_timeout(2000)
+                # OPTIMIZATION: Use domcontentloaded for faster navigation
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                
+                # Wait for reCAPTCHA to be ready
+                try:
+                    await page.wait_for_selector("iframe[src*='recaptcha']", timeout=10000)
+                except Exception:
+                    await page.wait_for_timeout(2000)
                 
                 # Check if this is enterprise reCAPTCHA
                 is_enterprise = await self._detect_enterprise(page)

@@ -59,7 +59,7 @@ class InvisibleSolver(BaseSolver):
             
             try:
                 # Acquire browser with fresh context
-                page, cleanup = await browser_pool.acquire_with_context(proxy)
+                page, cleanup = await browser_pool.acquire_with_cleanup(proxy)
                 
                 self.logger.info(f"Attempt {attempt + 1}: Navigating to {url}")
                 
@@ -90,8 +90,14 @@ class InvisibleSolver(BaseSolver):
                 ''')
                 
                 # Navigate to target URL
-                await page.goto(url, wait_until="networkidle", timeout=30000)
-                await page.wait_for_timeout(2000)
+                # OPTIMIZATION: Use domcontentloaded for faster navigation
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                
+                # Wait for reCAPTCHA to be ready
+                try:
+                    await page.wait_for_selector("iframe[src*='recaptcha']", timeout=10000)
+                except Exception:
+                    await page.wait_for_timeout(2000)
                 
                 # Try to trigger invisible reCAPTCHA
                 triggered = await self._trigger_invisible(page, sitekey, action)

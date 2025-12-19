@@ -1,12 +1,38 @@
 """
-Image Challenge Solver
-Handles reCAPTCHA image challenges using YOLO object detection
+Image Challenge Solver - Global YOLO Singleton
+===============================================
+
+Handles reCAPTCHA image challenges using YOLOv8 object detection.
+
+CRITICAL OPTIMIZATION: GLOBAL SINGLETON PATTERN
+------------------------------------------------
+The YOLO model is loaded ONCE at server startup and shared across all requests.
+
+WHY THIS MATTERS:
+- Model loading from disk: ~2-5 seconds
+- Model already in memory: ~0ms
+- On a 12-core VPS with 100 RPS, this saves 200-500 seconds of CPU time per second!
+
+MEMORY FOOTPRINT:
+- YOLOv8m model: ~50MB GPU / ~100MB CPU
+- Loaded once, stays in memory for server lifetime
+
+USAGE:
+------
+# At startup (in main.py lifespan):
+from challenges.image_solver import load_yolo_model
+model = load_yolo_model()
+
+# In request handlers:
+from challenges.image_solver import get_yolo_model
+model = get_yolo_model()  # Returns cached instance, no disk I/O
 """
 
 import os
 import logging
 import tempfile
 import base64
+import asyncio
 import aiohttp
 from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
@@ -16,7 +42,121 @@ import io
 logger = logging.getLogger(__name__)
 
 
-# Challenge type to YOLO class mapping
+# =============================================================================
+# GLOBAL SINGLETON - YOLO Model
+# =============================================================================
+
+# The model instance - loaded ONCE, used by ALL requests
+_yolo_model = None
+_yolo_model_lock = asyncio.Lock()
+
+
+def load_yolo_model(model_path: Optional[str] = None):
+    """
+    Load the YOLO model into memory (SINGLETON).
+    
+    This should be called ONCE during server startup.
+    The model stays in memory for the lifetime of the server.
+    
+    Args:
+        model_path: Optional path to custom model. If None, uses config.
+    
+    Returns:
+        YOLO model instance
+    
+    Usage:
+        # In main.py lifespan startup:
+        model = load_yolo_model()
+    """
+    global _yolo_model
+    
+    if _yolo_model is not None:
+        logger.debug("YOLO model already loaded (singleton)")
+        return _yolo_model
+    
+    try:
+        from ultralytics import YOLO  # type: ignore
+        from ..core.config import get_config
+        
+        config = get_config()
+        
+        # Determine model path
+        if model_path is None:
+            model_path = config.solver.image.model_path
+        
+        # Resolve relative paths
+        path = Path(model_path)
+        if not path.is_absolute():
+            path = config.base_dir / model_path
+        
+        # Load model
+        if path.exists():
+            logger.info(f"Loading custom YOLO model from {path}")
+            _yolo_model = YOLO(str(path))
+        else:
+            logger.warning(f"Custom model not found at {path}, using yolov8m")
+            _yolo_model = YOLO("yolov8m.pt")
+        
+        # Warm up the model with a dummy prediction (loads weights into GPU/CPU cache)
+        logger.info("Warming up YOLO model...")
+        dummy_image = Image.new('RGB', (640, 640), color='white')
+        _yolo_model.predict(dummy_image, verbose=False)
+        
+        logger.info(f"YOLO model loaded successfully: {type(_yolo_model).__name__}")
+        return _yolo_model
+        
+    except Exception as e:
+        logger.error(f"Failed to load YOLO model: {e}")
+        raise
+
+
+def get_yolo_model():
+    """
+    Get the loaded YOLO model (SINGLETON).
+    
+    Returns None if model hasn't been loaded yet.
+    This is a zero-cost operation - just returns the cached instance.
+    
+    Returns:
+        YOLO model instance or None
+    
+    Usage:
+        model = get_yolo_model()
+        if model:
+            results = model.predict(image)
+    """
+    return _yolo_model
+
+
+async def get_yolo_model_async():
+    """
+    Get the YOLO model, loading it if necessary (thread-safe).
+    
+    This is the async-safe version that can be called from request handlers.
+    Uses a lock to prevent multiple simultaneous loads.
+    
+    Returns:
+        YOLO model instance
+    """
+    global _yolo_model
+    
+    if _yolo_model is not None:
+        return _yolo_model
+    
+    async with _yolo_model_lock:
+        if _yolo_model is not None:
+            return _yolo_model
+        
+        # Run the synchronous load in a thread pool
+        loop = asyncio.get_event_loop()
+        _yolo_model = await loop.run_in_executor(None, load_yolo_model)
+        return _yolo_model
+
+
+# =============================================================================
+# CHALLENGE TYPE MAPPING
+# =============================================================================
+
 CHALLENGE_MAPPING = {
     # Singular forms
     "bicycle": "bicycle",
@@ -61,9 +201,17 @@ CHALLENGE_MAPPING = {
 }
 
 
+# =============================================================================
+# IMAGE SOLVER CLASS
+# =============================================================================
+
 class ImageSolver:
     """
     Solves reCAPTCHA image challenges using YOLOv8 object detection.
+    
+    IMPORTANT: This class uses the GLOBAL SINGLETON model.
+    It does NOT load the model itself - the model must be pre-loaded
+    at server startup via load_yolo_model().
     
     Supports:
     - 3x3 grid challenges
@@ -74,34 +222,22 @@ class ImageSolver:
     def __init__(self):
         from ..core.config import get_config
         self.config = get_config()
-        self.model_path = self.config.solver.image.model_path
         self.confidence_threshold = self.config.solver.image.confidence_threshold
         self.max_rounds = self.config.solver.image.max_rounds
-        self._model = None
     
-    def _load_model(self):
-        """Load the YOLO model"""
-        if self._model is None:
-            try:
-                from ultralytics import YOLO  # type: ignore
-                
-                # Check if custom model exists
-                model_path = Path(self.model_path)
-                if not model_path.is_absolute():
-                    model_path = self.config.base_dir / model_path
-                
-                if model_path.exists():
-                    logger.info(f"Loading custom YOLO model from {model_path}")
-                    self._model = YOLO(str(model_path))
-                else:
-                    logger.warning(f"Custom model not found at {model_path}, using yolov8m")
-                    self._model = YOLO("yolov8m.pt")
-                    
-            except Exception as e:
-                logger.error(f"Error loading YOLO model: {e}")
-                raise
+    def _get_model(self):
+        """
+        Get the YOLO model (singleton).
         
-        return self._model
+        This is a ZERO-COST operation - just returns the cached global instance.
+        No disk I/O, no initialization overhead.
+        """
+        model = get_yolo_model()
+        if model is None:
+            raise RuntimeError(
+                "YOLO model not loaded. Call load_yolo_model() at startup."
+            )
+        return model
     
     async def solve(self, page) -> Dict[str, Any]:
         """
@@ -114,8 +250,8 @@ class ImageSolver:
             dict with 'success' and 'error' keys
         """
         try:
-            # Load model
-            model = self._load_model()
+            # Get the singleton model (zero-cost)
+            model = self._get_model()
             
             for round_num in range(self.max_rounds):
                 logger.info(f"Image solve round {round_num + 1}/{self.max_rounds}")
@@ -150,7 +286,7 @@ class ImageSolver:
                 
                 logger.info(f"Got {len(tiles)} tiles")
                 
-                # Classify tiles
+                # Classify tiles using the singleton model
                 matching_indices = await self._classify_tiles(tiles, target_class, model)
                 logger.info(f"Matching tiles: {matching_indices}")
                 
@@ -208,15 +344,10 @@ class ImageSolver:
     async def _get_challenge_type(self, frame) -> Optional[str]:
         """Extract the challenge type from the instructions"""
         try:
-            # Get instruction text
             instruction = await frame.query_selector(".rc-imageselect-desc-wrapper")
             if instruction:
                 text = await instruction.text_content()
                 text = text.lower().strip()
-                
-                # Extract the target object
-                # "Select all images with bicycles"
-                # "Click verify once there are none left"
                 
                 for key in CHALLENGE_MAPPING.keys():
                     if key in text:
@@ -233,11 +364,9 @@ class ImageSolver:
         """Map challenge text to YOLO class name"""
         challenge_lower = challenge_type.lower()
         
-        # Direct lookup
         if challenge_lower in CHALLENGE_MAPPING:
             return CHALLENGE_MAPPING[challenge_lower]
         
-        # Partial match
         for key, value in CHALLENGE_MAPPING.items():
             if key in challenge_lower:
                 return value
@@ -245,31 +374,22 @@ class ImageSolver:
         return None
     
     async def _get_tile_images(self, frame) -> List[Tuple[int, bytes]]:
-        """
-        Get all tile images from the challenge.
-        
-        Returns:
-            List of (index, image_bytes) tuples
-        """
+        """Get all tile images from the challenge."""
         tiles = []
         
         try:
-            # Get tile elements
             tile_elements = await frame.query_selector_all(".rc-imageselect-tile")
             
             for i, tile in enumerate(tile_elements):
                 try:
-                    # Get the image element within the tile
                     img = await tile.query_selector("img")
                     if img:
                         src = await img.get_attribute("src")
                         if src:
                             if src.startswith("data:"):
-                                # Base64 encoded
                                 data = src.split(",")[1]
                                 image_bytes = base64.b64decode(data)
                             else:
-                                # URL - download
                                 async with aiohttp.ClientSession() as session:
                                     async with session.get(src) as response:
                                         if response.status == 200:
@@ -293,45 +413,31 @@ class ImageSolver:
         target_class: str,
         model
     ) -> List[int]:
-        """
-        Classify tiles and return indices of matching tiles.
-        
-        Args:
-            tiles: List of (index, image_bytes) tuples
-            target_class: Target class name to detect
-            model: YOLO model
-        
-        Returns:
-            List of tile indices that contain the target
-        """
+        """Classify tiles and return indices of matching tiles."""
         matching_indices = []
         
         for idx, image_bytes in tiles:
             try:
-                # Convert bytes to PIL Image
                 image = Image.open(io.BytesIO(image_bytes))
                 
-                # Run YOLO prediction
+                # Run prediction using the singleton model
                 results = model.predict(
                     image,
                     conf=self.confidence_threshold,
                     verbose=False
                 )
                 
-                # Check if target class detected
                 if results and len(results) > 0:
                     for detection in results[0].boxes:
                         class_id = int(detection.cls)
                         class_name = model.names[class_id]
                         confidence = float(detection.conf)
                         
-                        # Check if matches target
                         if class_name.lower() == target_class.lower():
                             logger.debug(f"Tile {idx}: Found {class_name} with conf {confidence:.2f}")
                             matching_indices.append(idx)
                             break
                         
-                        # Also check for similar names
                         if target_class.replace("_", " ") in class_name.lower():
                             logger.debug(f"Tile {idx}: Found {class_name} (similar) with conf {confidence:.2f}")
                             matching_indices.append(idx)
@@ -350,7 +456,7 @@ class ImageSolver:
             for idx in indices:
                 if idx < len(tile_elements):
                     await tile_elements[idx].click()
-                    await frame.wait_for_timeout(200)  # Small delay between clicks
+                    await frame.wait_for_timeout(200)
                     
         except Exception as e:
             logger.error(f"Error clicking tiles: {e}")
@@ -396,7 +502,6 @@ class ImageSolver:
     async def _check_new_tiles(self, frame) -> bool:
         """Check if new tiles appeared (dynamic challenge)"""
         try:
-            # Look for tiles that are fading in or have loading state
             loading_tiles = await frame.query_selector_all(".rc-imageselect-dynamic-selected")
             return len(loading_tiles) > 0
         except Exception:

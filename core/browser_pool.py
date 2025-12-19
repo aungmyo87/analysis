@@ -123,14 +123,21 @@ class BrowserPool:
     OPTIMAL SETTINGS FOR 12-CORE / 24GB RAM:
     ----------------------------------------
     - browser_count: 6-12 (1 browser per 1-2 cores)
-    - max_contexts_per_browser: 10-20 (memory dependent)
-    - Total concurrent contexts: 60-240
+    - max_contexts_per_browser: 10 (safe for 24GB RAM)
+    - Total concurrent contexts: 60-120
+    
+    MEMORY CALCULATION:
+    - Each browser process: ~150-300MB
+    - Each context: ~20-50MB
+    - 12 browsers × 300MB = 3.6GB
+    - 120 contexts × 50MB = 6GB
+    - Total max: ~10GB (safe buffer for 24GB RAM)
     """
     
     def __init__(
         self,
         browser_count: Optional[int] = None,
-        max_contexts_per_browser: int = 15,
+        max_contexts_per_browser: int = 10,  # Reduced from 15 for RAM safety
     ):
         config = get_config()
         
