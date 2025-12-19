@@ -1,0 +1,43 @@
+# Unified reCAPTCHA Solver Configuration
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  workers: 4
+  debug: false
+
+browser:
+  pool_size: 20
+  headless: true
+  timeout: 60
+  user_agent_rotation: true
+
+solver:
+  primary_method: "audio"      # audio | image
+  fallback_enabled: true
+  max_retries: 3
+  
+  audio:
+    engine: "whisper"          # whisper | google | azure
+    whisper_model: "base"
+    max_attempts: 5
+    
+  image:
+    engine: "yolo"             # yolo | clip | openai
+    model_path: "models/recaptcha_yolov8m_best.pt"
+    confidence_threshold: 0.5
+    max_rounds: 10
+
+pricing:
+  normal_v2: 0.001
+  invisible_v2: 0.0012
+  enterprise_v2: 0.0015
+
+rate_limit:
+  requests_per_minute: 60
+  concurrent_tasks: 50
+
+logging:
+  level: "INFO"
+  format: "json"
+  file: "logs/solver.log"

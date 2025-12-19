@@ -1,0 +1,14 @@
+{
+    "owner_key_12345": {
+        "balance": 1000.0,
+        "is_owner": true,
+        "created": "2024-12-19T00:00:00",
+        "expires": null
+    },
+    "test_key_67890": {
+        "balance": 10.0,
+        "is_owner": false,
+        "created": "2024-12-19T00:00:00",
+        "expires": null
+    }
+}

@@ -1,0 +1,41 @@
+# Unified reCAPTCHA Solver Dependencies
+
+# Web Framework
+flask>=3.0.0
+flask-cors>=4.0.0
+gunicorn>=21.0.0
+
+# Browser Automation
+patchright>=0.1.0
+
+# Audio Processing
+SpeechRecognition>=3.10.0
+openai-whisper>=20231117
+pydub>=0.25.1
+
+# Image Processing & ML
+ultralytics>=8.1.0
+torch>=2.1.0
+torchvision>=0.16.0
+Pillow>=10.0.0
+numpy<2.0
+opencv-python>=4.8.0
+
+# Async & Concurrency
+aiohttp>=3.9.0
+asyncio>=3.4.3
+
+# Configuration
+pyyaml>=6.0.0
+python-dotenv>=1.0.0
+
+# Utilities
+requests>=2.31.0
+httpx>=0.25.0
+uuid>=1.30
+
+# Logging
+structlog>=23.2.0
+
+# Optional: Azure Speech
+# azure-cognitiveservices-speech>=1.32.0
