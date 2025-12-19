@@ -1,16 +1,36 @@
 """
 Audio Challenge Solver
-Handles reCAPTCHA audio challenges using speech recognition
+=========================
+
+Handles reCAPTCHA audio challenges using speech recognition.
+
+OPTIMIZATIONS:
+--------------
+1. Audio Cleaning: Normalize + remove silence via pydub before Whisper
+2. Whisper Tuning: Medium model + initial_prompt for digit recognition
+3. Stealth Download: User-Agent header matching browser fingerprint
+4. Error Handling: AudioRateLimitError for immediate YOLO fallback
 """
 
 import os
 import logging
 import tempfile
+import asyncio
 import aiohttp
 from typing import Dict, Any, Optional
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+class AudioRateLimitError(Exception):
+    """
+    Raised when reCAPTCHA rate-limits audio challenges.
+    
+    This signals NormalSolver to skip remaining audio attempts
+    and switch immediately to YOLO image solver.
+    """
+    pass
 
 
 class AudioSolver:
@@ -58,10 +78,10 @@ class AudioSolver:
                 
                 await page.wait_for_timeout(1000)
                 
-                # Check for rate limit
+                # Check for rate limit - raise exception for immediate fallback
                 if await self._check_rate_limit(challenge_frame):
-                    logger.warning("Rate limited, cannot use audio")
-                    return {"success": False, "error": "Rate limited"}
+                    logger.warning("Rate limited - raising AudioRateLimitError for YOLO fallback")
+                    raise AudioRateLimitError("reCAPTCHA audio rate limited")
                 
                 # Get audio URL
                 audio_url = await self._get_audio_url(challenge_frame)
@@ -189,10 +209,36 @@ class AudioSolver:
             logger.error(f"Error getting audio URL: {e}")
             return None
     
-    async def _download_audio(self, url: str) -> Optional[str]:
-        """Download audio file to temp location"""
+    async def _download_audio(self, url: str, user_agent: Optional[str] = None) -> Optional[str]:
+        """
+        Download audio file with stealth headers.
+        
+        Args:
+            url: Audio file URL
+            user_agent: Browser User-Agent to match fingerprint
+        
+        Returns:
+            Path to downloaded temp file or None
+        """
         try:
-            async with aiohttp.ClientSession() as session:
+            # Stealth headers to match browser fingerprint
+            headers = {
+                "Accept": "audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "identity",
+                "Referer": "https://www.google.com/",
+                "Sec-Fetch-Dest": "audio",
+                "Sec-Fetch-Mode": "no-cors",
+                "Sec-Fetch-Site": "cross-site",
+            }
+            
+            # Use provided user_agent or default Chrome UA
+            headers["User-Agent"] = user_agent or (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            
+            async with aiohttp.ClientSession(headers=headers) as session:
                 async with session.get(url) as response:
                     if response.status == 200:
                         # Save to temp file
@@ -203,6 +249,57 @@ class AudioSolver:
         except Exception as e:
             logger.error(f"Error downloading audio: {e}")
             return None
+    
+    def _clean_audio(self, audio_path: str) -> str:
+        """
+        Clean audio for better Whisper transcription.
+        
+        Operations:
+        1. Normalize volume to -20 dBFS
+        2. Remove leading/trailing silence
+        3. Apply slight noise reduction via low-pass filter
+        
+        Args:
+            audio_path: Path to raw audio file
+        
+        Returns:
+            Path to cleaned audio file
+        """
+        try:
+            from pydub import AudioSegment
+            from pydub.silence import strip_silence
+            
+            # Load audio
+            audio = AudioSegment.from_mp3(audio_path)
+            
+            # Normalize volume to -20 dBFS (good level for speech)
+            target_dBFS = -20.0
+            change_in_dBFS = target_dBFS - audio.dBFS
+            audio = audio.apply_gain(change_in_dBFS)
+            
+            # Remove leading/trailing silence
+            # silence_thresh: audio below this is considered silence
+            # min_silence_len: minimum length of silence to strip (ms)
+            audio = strip_silence(
+                audio,
+                silence_thresh=-40,  # dBFS threshold
+                padding=100  # Keep 100ms padding
+            )
+            
+            # Low-pass filter to reduce high-frequency noise
+            # reCAPTCHA audio is speech, mostly below 4kHz
+            audio = audio.low_pass_filter(4000)
+            
+            # Export cleaned audio
+            cleaned_path = audio_path.replace(".mp3", "_cleaned.mp3")
+            audio.export(cleaned_path, format="mp3")
+            
+            logger.debug(f"Audio cleaned: {audio_path} -> {cleaned_path}")
+            return cleaned_path
+            
+        except Exception as e:
+            logger.warning(f"Audio cleaning failed, using original: {e}")
+            return audio_path
     
     async def _transcribe_audio(self, audio_path: str) -> Optional[str]:
         """Transcribe audio using configured engine"""
@@ -221,25 +318,58 @@ class AudioSolver:
             return None
     
     async def _transcribe_whisper(self, audio_path: str) -> Optional[str]:
-        """Transcribe using local Whisper model"""
+        """
+        Transcribe using local Whisper model with reCAPTCHA-tuned settings.
+        
+        Optimizations:
+        - Medium model for better accuracy (fits 24GB RAM)
+        - initial_prompt tuned for digit/letter sequences
+        - Clean audio before transcription
+        """
         try:
             import whisper  # type: ignore
             
-            # Load model (cached)
+            # Load model (cached) - use medium for better accuracy
             if self._whisper_model is None:
                 model_name = self.config.solver.audio.whisper_model
                 logger.info(f"Loading Whisper model: {model_name}")
                 self._whisper_model = whisper.load_model(model_name)
             
-            # Transcribe
-            result = self._whisper_model.transcribe(
-                audio_path,
-                language="en",
-                fp16=False
-            )
+            # Clean audio before transcription
+            cleaned_path = self._clean_audio(audio_path)
             
-            text = result.get("text", "").strip()
-            return text if text else None
+            try:
+                # Initial prompt tuned for reCAPTCHA audio challenges
+                # Primes Whisper to expect digits and letters
+                initial_prompt = (
+                    "The audio contains spoken digits and letters. "
+                    "Examples: 7 3 9 2 5, a b c d e, 4 8 1 6 0, "
+                    "m n p q r, 2 4 6 8 0."
+                )
+                
+                # Transcribe with optimized settings
+                result = self._whisper_model.transcribe(
+                    cleaned_path,
+                    language="en",
+                    fp16=False,  # CPU mode
+                    initial_prompt=initial_prompt,
+                    temperature=0.0,  # Deterministic output
+                    compression_ratio_threshold=2.4,
+                    logprob_threshold=-1.0,
+                    no_speech_threshold=0.6,
+                )
+                
+                text = result.get("text", "").strip()
+                
+                # Post-process: remove extra spaces, lowercase
+                text = " ".join(text.split()).lower()
+                
+                return text if text else None
+                
+            finally:
+                # Cleanup cleaned audio if different from original
+                if cleaned_path != audio_path and os.path.exists(cleaned_path):
+                    os.remove(cleaned_path)
             
         except Exception as e:
             logger.error(f"Whisper transcription error: {e}")

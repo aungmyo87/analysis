@@ -18,7 +18,7 @@ from typing import Optional, Dict
 
 from .base_solver import BaseSolver, SolverResult
 from ..core.browser_pool import get_browser_pool
-from ..challenges import AudioSolver, ImageSolver
+from ..challenges import AudioSolver, AudioRateLimitError, ImageSolver
 
 logger = logging.getLogger(__name__)
 
@@ -160,13 +160,17 @@ class NormalSolver(BaseSolver):
         
         # Try primary method
         if primary_method == "audio":
-            result = await self._try_audio_solver(page)
-            if result.success:
-                return result
+            try:
+                result = await self._try_audio_solver(page)
+                if result.success:
+                    return result
+            except AudioRateLimitError:
+                # Rate limited - skip to image immediately
+                self.logger.info("Audio rate-limited, skipping to YOLO")
             
             # Fallback to image
             if fallback_enabled:
-                self.logger.info("Audio failed, trying image solver")
+                self.logger.info("Trying image solver")
                 result = await self._try_image_solver(page)
                 if result.success:
                     return result
@@ -178,14 +182,22 @@ class NormalSolver(BaseSolver):
             # Fallback to audio
             if fallback_enabled:
                 self.logger.info("Image failed, trying audio solver")
-                result = await self._try_audio_solver(page)
-                if result.success:
-                    return result
+                try:
+                    result = await self._try_audio_solver(page)
+                    if result.success:
+                        return result
+                except AudioRateLimitError:
+                    self.logger.warning("Audio rate-limited during fallback")
         
         return SolverResult(success=False, error="All solving methods failed")
     
     async def _try_audio_solver(self, page) -> SolverResult:
-        """Try solving with audio method"""
+        """
+        Try solving with audio method.
+        
+        Raises AudioRateLimitError if rate-limited, signaling
+        immediate switch to YOLO image solver.
+        """
         try:
             audio_solver = AudioSolver()
             result = await audio_solver.solve(page)
@@ -205,6 +217,11 @@ class NormalSolver(BaseSolver):
                 error=result.get('error', 'Audio solver failed'),
                 method="audio"
             )
+        
+        except AudioRateLimitError:
+            # Re-raise to signal immediate fallback to YOLO
+            self.logger.warning("Audio rate-limited, switching to YOLO immediately")
+            raise
             
         except Exception as e:
             self.logger.error(f"Audio solver error: {e}")

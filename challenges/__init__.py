@@ -18,7 +18,7 @@ Usage:
     model = get_yolo_model()  # Returns cached instance
 """
 
-from .audio_solver import AudioSolver
+from .audio_solver import AudioSolver, AudioRateLimitError
 from .image_solver import (
     ImageSolver,
     load_yolo_model,
@@ -28,6 +28,7 @@ from .image_solver import (
 
 __all__ = [
     'AudioSolver',
+    'AudioRateLimitError',
     'ImageSolver',
     'load_yolo_model',
     'get_yolo_model',

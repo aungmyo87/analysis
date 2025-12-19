@@ -6,9 +6,10 @@ FastAPI server with proper async lifecycle management.
 
 STARTUP SEQUENCE:
 1. Load configuration
-2. Initialize YOLO model (singleton - loaded ONCE)
-3. Initialize Browser Pool (persistent browser processes)
-4. Start accepting requests
+2. Initialize SQLite database (async connection pool)
+3. Initialize YOLO model (singleton - loaded ONCE)
+4. Initialize Browser Pool (persistent browser processes)
+5. Start accepting requests
 
 This ensures NO cold-start latency on first request.
 
@@ -37,6 +38,7 @@ from api.app import create_app
 from core.config import get_config, load_config
 from core.browser_pool import get_browser_pool, close_browser_pool
 from challenges.image_solver import load_yolo_model, get_yolo_model
+from database import init_db, close_db
 from utils.logger import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -57,24 +59,33 @@ async def lifespan(app: FastAPI):
     logger.info("STARTUP: Initializing reCAPTCHA Solver...")
     logger.info("=" * 60)
     
-    # 1. Load YOLO model (singleton - ~2-5 seconds, done ONCE)
-    logger.info("[1/2] Loading YOLO model...")
+    # 1. Initialize SQLite database
+    logger.info("[1/3] Initializing SQLite database...")
+    try:
+        await init_db()
+        logger.info("[1/3] Database initialized successfully")
+    except Exception as e:
+        logger.error(f"[1/3] Failed to initialize database: {e}")
+        raise  # Can't operate without database
+    
+    # 2. Load YOLO model (singleton - ~2-5 seconds, done ONCE)
+    logger.info("[2/3] Loading YOLO model...")
     try:
         model = load_yolo_model()
-        logger.info(f"[1/2] YOLO model loaded: {type(model).__name__}")
+        logger.info(f"[2/3] YOLO model loaded: {type(model).__name__}")
     except Exception as e:
-        logger.error(f"[1/2] Failed to load YOLO model: {e}")
+        logger.error(f"[2/3] Failed to load YOLO model: {e}")
         # Continue without model - will fallback to audio solver
     
-    # 2. Initialize Browser Pool (launches persistent browsers)
-    logger.info("[2/2] Initializing browser pool...")
+    # 3. Initialize Browser Pool (launches persistent browsers)
+    logger.info("[3/3] Initializing browser pool...")
     try:
         pool = await get_browser_pool()
         stats = pool.get_stats()
-        logger.info(f"[2/2] Browser pool ready: {stats['browser_count']} browsers, "
+        logger.info(f"[3/3] Browser pool ready: {stats['browser_count']} browsers, "
                    f"max {stats['max_total_capacity']} concurrent contexts")
     except Exception as e:
-        logger.error(f"[2/2] Failed to initialize browser pool: {e}")
+        logger.error(f"[3/3] Failed to initialize browser pool: {e}")
         raise  # Can't operate without browsers
     
     logger.info("=" * 60)
@@ -97,6 +108,13 @@ async def lifespan(app: FastAPI):
         logger.info("Browser pool closed")
     except Exception as e:
         logger.error(f"Error closing browser pool: {e}")
+    
+    # Close database connection
+    try:
+        await close_db()
+        logger.info("Database connection closed")
+    except Exception as e:
+        logger.error(f"Error closing database: {e}")
     
     logger.info("Shutdown complete")
 

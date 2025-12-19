@@ -19,7 +19,7 @@ solver:
   
   audio:
     engine: "whisper"          # whisper | google | azure
-    whisper_model: "base"
+    whisper_model: "medium"    # medium for better accuracy (needs ~5GB RAM)
     max_attempts: 5
     
   image:
