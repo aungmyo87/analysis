@@ -34,12 +34,124 @@ import tempfile
 import base64
 import asyncio
 import aiohttp
+import uuid
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
 from PIL import Image
 import io
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# ACTIVE LEARNING DATA COLLECTION
+# =============================================================================
+
+# Thread pool for non-blocking image saving
+_image_save_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="img_saver")
+
+# Base paths for data collection
+DATA_COLLECTION_BASE = Path(__file__).parent.parent / "data" / "training_collection"
+FAILED_CASES_DIR = DATA_COLLECTION_BASE / "failed_cases"
+
+# Confidence thresholds for uncertain predictions (Active Learning)
+AL_CONFIDENCE_LOW = 0.3
+AL_CONFIDENCE_HIGH = 0.6
+
+# Unique class names for folder creation (from CHALLENGE_MAPPING values)
+UNIQUE_CLASSES = {
+    "bicycle", "bus", "car", "crosswalk", "fire_hydrant",
+    "motorcycle", "traffic_light", "stairs", "chimney",
+    "bridge", "boat", "tractor"
+}
+
+
+def _ensure_collection_directories():
+    """
+    Create all necessary directories for data collection.
+    Called once at startup.
+    """
+    try:
+        # Create base directory
+        DATA_COLLECTION_BASE.mkdir(parents=True, exist_ok=True)
+        
+        # Create class subdirectories
+        for class_name in UNIQUE_CLASSES:
+            class_dir = DATA_COLLECTION_BASE / class_name
+            class_dir.mkdir(exist_ok=True)
+        
+        # Create failed_cases directory
+        FAILED_CASES_DIR.mkdir(exist_ok=True)
+        
+        logger.info(f"Active Learning directories initialized at: {DATA_COLLECTION_BASE}")
+    except Exception as e:
+        logger.warning(f"Could not create data collection directories: {e}")
+
+
+def _save_image_sync(image_bytes: bytes, save_path: Path):
+    """
+    Synchronous image save (runs in thread pool).
+    """
+    try:
+        with open(save_path, "wb") as f:
+            f.write(image_bytes)
+    except Exception as e:
+        logger.debug(f"Failed to save image to {save_path}: {e}")
+
+
+def save_uncertain_tile(image_bytes: bytes, class_name: str, confidence: float):
+    """
+    Save a tile with uncertain prediction for Active Learning.
+    Non-blocking - submits to thread pool.
+    
+    Args:
+        image_bytes: Raw image bytes
+        class_name: Target class name (e.g., "bicycle", "car")
+        confidence: Model confidence score
+    """
+    try:
+        class_dir = DATA_COLLECTION_BASE / class_name
+        if not class_dir.exists():
+            class_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate unique filename with confidence score
+        filename = f"{uuid.uuid4().hex[:12]}_conf{confidence:.2f}.jpg"
+        save_path = class_dir / filename
+        
+        # Submit to thread pool (non-blocking)
+        _image_save_executor.submit(_save_image_sync, image_bytes, save_path)
+        logger.debug(f"Queued uncertain tile for saving: {class_name} (conf={confidence:.2f})")
+    except Exception as e:
+        logger.debug(f"Error queueing uncertain tile: {e}")
+
+
+def save_failed_case_tiles(tiles: List[Tuple[int, bytes]], challenge_type: str):
+    """
+    Save all tiles from a failed solve attempt.
+    Non-blocking - submits to thread pool.
+    
+    Args:
+        tiles: List of (index, image_bytes) tuples
+        challenge_type: The challenge type that failed
+    """
+    try:
+        # Create a unique subfolder for this failed case
+        case_id = uuid.uuid4().hex[:8]
+        safe_challenge = challenge_type.replace(" ", "_").replace("/", "_")[:30]
+        case_dir = FAILED_CASES_DIR / f"{safe_challenge}_{case_id}"
+        case_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Submit each tile to thread pool
+        for idx, image_bytes in tiles:
+            filename = f"tile_{idx:02d}.jpg"
+            save_path = case_dir / filename
+            _image_save_executor.submit(_save_image_sync, image_bytes, save_path)
+        
+        logger.info(f"Queued {len(tiles)} tiles from failed case to: {case_dir.name}")
+    except Exception as e:
+        logger.debug(f"Error saving failed case tiles: {e}")
 
 
 # =============================================================================
@@ -73,6 +185,9 @@ def load_yolo_model(model_path: Optional[str] = None):
     if _yolo_model is not None:
         logger.debug("YOLO model already loaded (singleton)")
         return _yolo_model
+    
+    # Initialize Active Learning directories
+    _ensure_collection_directories()
     
     try:
         from ultralytics import YOLO  # type: ignore
@@ -248,7 +363,13 @@ class ImageSolver:
         
         Returns:
             dict with 'success' and 'error' keys
+        
+        ACTIVE LEARNING: On failure, saves all tiles from the last round
+        to data/training_collection/failed_cases/ for analysis.
         """
+        last_round_tiles = []  # Track tiles for failed case collection
+        last_challenge_type = None
+        
         try:
             # Get the singleton model (zero-cost)
             model = self._get_model()
@@ -269,6 +390,7 @@ class ImageSolver:
                     return {"success": False, "error": "Unknown challenge type"}
                 
                 logger.info(f"Challenge type: {challenge_type}")
+                last_challenge_type = challenge_type
                 
                 # Map to YOLO class
                 target_class = self._map_challenge_to_class(challenge_type)
@@ -285,6 +407,9 @@ class ImageSolver:
                     return {"success": False, "error": "Could not get tiles"}
                 
                 logger.info(f"Got {len(tiles)} tiles")
+                
+                # Store for potential failed case collection
+                last_round_tiles = tiles
                 
                 # Classify tiles using the singleton model
                 matching_indices = await self._classify_tiles(tiles, target_class, model)
@@ -315,10 +440,19 @@ class ImageSolver:
                     logger.info(f"Challenge changed to: {new_challenge_type}")
                     continue
             
+            # ACTIVE LEARNING: Save failed case tiles
+            if last_round_tiles and last_challenge_type:
+                save_failed_case_tiles(last_round_tiles, last_challenge_type)
+            
             return {"success": False, "error": f"Failed after {self.max_rounds} rounds"}
             
         except Exception as e:
             logger.error(f"Image solve error: {e}")
+            
+            # ACTIVE LEARNING: Save failed case tiles on exception too
+            if last_round_tiles and last_challenge_type:
+                save_failed_case_tiles(last_round_tiles, last_challenge_type)
+            
             return {"success": False, "error": str(e)}
     
     async def _get_challenge_frame(self, page):
@@ -413,7 +547,12 @@ class ImageSolver:
         target_class: str,
         model
     ) -> List[int]:
-        """Classify tiles and return indices of matching tiles."""
+        """
+        Classify tiles and return indices of matching tiles.
+        
+        ACTIVE LEARNING: Tiles with uncertain predictions (confidence 0.3-0.6)
+        are saved to data/training_collection/{class}/ for later labeling.
+        """
         matching_indices = []
         
         for idx, image_bytes in tiles:
@@ -432,6 +571,10 @@ class ImageSolver:
                         class_id = int(detection.cls)
                         class_name = model.names[class_id]
                         confidence = float(detection.conf)
+                        
+                        # Active Learning: Save uncertain predictions
+                        if AL_CONFIDENCE_LOW <= confidence <= AL_CONFIDENCE_HIGH:
+                            save_uncertain_tile(image_bytes, target_class, confidence)
                         
                         if class_name.lower() == target_class.lower():
                             logger.debug(f"Tile {idx}: Found {class_name} with conf {confidence:.2f}")
